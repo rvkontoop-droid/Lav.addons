@@ -1,7 +1,4 @@
-"use client"
-
 import type * as React from "react"
-import { useSession } from "next-auth/react"
 import {
   Settings,
   Volume2,
@@ -98,9 +95,6 @@ const adminItems = [
 ]
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
-  const { data: session } = useSession()
-  const isAddonsTeamMember = session?.user?.isAddonsTeam || false
-
   return (
     <Sidebar variant="inset" {...props}>
       <SidebarHeader>
@@ -139,7 +133,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {isAddonsTeamMember && (
+        {
           <SidebarGroup>
             <SidebarGroupLabel>Admin</SidebarGroupLabel>
             <SidebarGroupContent>
@@ -157,7 +151,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
-        )}
+        }
       </SidebarContent>
       <SidebarRail />
     </Sidebar>
