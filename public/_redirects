@@ -1,1 +1,11 @@
-/*    /index.html   200
+# API routes - handle before catch-all
+/api/*  /.netlify/functions/:splat  200
+
+# Auth callbacks
+/auth/*  /.netlify/functions/:splat  200
+
+# Static files
+/_next/*  /_next/:splat  200
+
+# Catch-all for client-side routing
+/*  /index.html  200
