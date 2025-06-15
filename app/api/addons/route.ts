@@ -1,26 +1,53 @@
+import { type NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
-import { type NextRequest, NextResponse } from "next/server"
-import { supabase, isSupabaseConfigured } from "@/lib/supabase"
+import { getAddons, saveAddons, flattenAddons } from "@/lib/storage"
 import { createAuditLog } from "@/lib/audit"
+import type { Addon } from "@/types/addon"
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    if (isSupabaseConfigured() && supabase) {
-      const { data: addons, error } = await supabase
-        .from("addons")
-        .select("*")
-        .order("created_at", { ascending: false })
+    const categorizedAddons = await getAddons()
+    const { searchParams } = new URL(request.url)
+    const category = searchParams.get("category")
 
-      if (error) throw error
+    let filteredAddons: Addon[] = []
 
-      return NextResponse.json(addons || [])
+    if (category && categorizedAddons[category]) {
+      filteredAddons = [...categorizedAddons[category]]
+    } else {
+      filteredAddons = flattenAddons(categorizedAddons)
     }
 
-    // Fallback to empty array if Supabase not configured
-    return NextResponse.json([])
+    const search = searchParams.get("search")
+    if (search) {
+      const searchLower = search.toLowerCase()
+      filteredAddons = filteredAddons.filter(
+        (addon) =>
+          addon.name.toLowerCase().includes(searchLower) ||
+          addon.description.toLowerCase().includes(searchLower) ||
+          addon.tags?.some((tag) => tag.toLowerCase().includes(searchLower)),
+      )
+    }
+
+    const sortBy = searchParams.get("sortBy") || "newest"
+    switch (sortBy) {
+      case "oldest":
+        filteredAddons.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+        break
+      case "popular":
+        filteredAddons.sort((a, b) => b.downloads - a.downloads)
+        break
+      case "name":
+        filteredAddons.sort((a, b) => a.name.localeCompare(b.name))
+        break
+      default:
+        filteredAddons.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    }
+
+    return NextResponse.json(filteredAddons)
   } catch (error) {
-    console.error("Error fetching addons:", error)
+    console.error("Failed to fetch addons:", error)
     return NextResponse.json({ error: "Failed to fetch addons" }, { status: 500 })
   }
 }
@@ -29,61 +56,115 @@ export async function POST(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions)
 
-    // Check if user is authenticated and has upload role
-    if (!session?.user?.isAddonsTeam) {
-      return NextResponse.json({ error: "Unauthorized - Addons Team role required" }, { status: 403 })
+    if (!session) {
+      return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
     }
 
-    const body = await request.json()
+    if (!session.user.isAddonsTeam) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 403 })
+    }
 
-    // Validate required fields
-    if (!body.name || !body.description || !body.category || !body.downloadUrl) {
+    let addonData: Omit<Addon, "id" | "createdAt" | "downloads">
+    try {
+      const body = await request.text()
+      addonData = JSON.parse(body)
+    } catch (error) {
+      return NextResponse.json({ error: "Invalid data" }, { status: 400 })
+    }
+
+    if (!addonData.name || !addonData.description || !addonData.category || !addonData.downloadUrl) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 })
     }
 
-    const newAddon = {
-      id: `addon_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      name: body.name,
-      description: body.description,
-      category: body.category,
-      tags: body.tags || [],
-      author: body.author,
-      download_url: body.downloadUrl,
-      preview_url: body.imageUrl || body.previewUrl,
-      video_url: body.videoUrl,
+    const categorizedAddons = await getAddons()
+
+    if (!categorizedAddons.hasOwnProperty(addonData.category)) {
+      return NextResponse.json({ error: "Invalid category" }, { status: 400 })
+    }
+
+    const newAddon: Addon = {
+      ...addonData,
+      id: `${addonData.category}_${Date.now()}`,
+      createdAt: new Date().toISOString().split("T")[0],
+      updatedAt: new Date().toISOString().split("T")[0],
       downloads: 0,
-      created_at: new Date().toISOString(),
     }
 
-    if (isSupabaseConfigured() && supabase) {
-      const { data, error } = await supabase.from("addons").insert([newAddon]).select().single()
+    categorizedAddons[addonData.category].push(newAddon)
+    await saveAddons(categorizedAddons)
 
-      if (error) {
-        console.error("Supabase error:", error)
-        throw error
-      }
+    // Create audit log
+    await createAuditLog({
+      action: "CREATE",
+      entityType: "ADDON",
+      entityId: newAddon.id,
+      entityName: newAddon.name,
+      userId: session.user.id,
+      username: session.user.username,
+      userAvatar: session.user.avatar,
+    })
 
-      // Create audit log
-      await createAuditLog({
-        action: "CREATE",
-        entityType: "addon",
-        entityId: newAddon.id,
-        entityName: newAddon.name,
-        username: session.user.username || "Unknown",
-        userId: session.user.id,
-        changes: { created: newAddon },
-      })
-
-      return NextResponse.json(data, { status: 201 })
-    } else {
-      // Fallback response when Supabase not configured
-      return NextResponse.json({ error: "Database not configured" }, { status: 500 })
-    }
+    return NextResponse.json(newAddon, { status: 201 })
   } catch (error) {
     console.error("Upload error:", error)
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Failed to upload addon" },
-      { status: 500 },
-    )
+    return NextResponse.json({ error: "Failed to upload addon" }, { status: 500 })
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session) {
+      return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+    }
+
+    if (!session.user.isAddonsTeam) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 403 })
+    }
+
+    const { searchParams } = new URL(request.url)
+    const addonId = searchParams.get("id")
+
+    if (!addonId) {
+      return NextResponse.json({ error: "Addon ID is required" }, { status: 400 })
+    }
+
+    const categorizedAddons = await getAddons()
+
+    let found = false
+    let deletedAddon: Addon | null = null
+
+    for (const category in categorizedAddons) {
+      const index = categorizedAddons[category].findIndex((addon) => addon.id === addonId)
+      if (index !== -1) {
+        deletedAddon = categorizedAddons[category][index]
+        categorizedAddons[category].splice(index, 1)
+        found = true
+        break
+      }
+    }
+
+    if (!found || !deletedAddon) {
+      return NextResponse.json({ error: "Addon not found" }, { status: 404 })
+    }
+
+    await saveAddons(categorizedAddons)
+
+    // Create audit log
+    await createAuditLog({
+      action: "DELETE",
+      entityType: "ADDON",
+      entityId: deletedAddon.id,
+      entityName: deletedAddon.name,
+      userId: session.user.id,
+      username: session.user.username,
+      userAvatar: session.user.avatar,
+    })
+
+    return NextResponse.json({ message: "Addon deleted successfully" })
+  } catch (error) {
+    console.error("Delete error:", error)
+    return NextResponse.json({ error: "Failed to delete addon" }, { status: 500 })
   }
 }

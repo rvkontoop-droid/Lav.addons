@@ -1,13 +1,18 @@
 export interface AuditLog {
   id: string
   action: "CREATE" | "UPDATE" | "DELETE"
-  entityType: "addon"
+  entityType: "ADDON"
   entityId: string
   entityName: string
-  username: string
   userId: string
-  changes: Record<string, any>
+  username: string
+  userAvatar: string
+  changes?: {
+    field: string
+    oldValue: any
+    newValue: any
+  }[]
   timestamp: string
+  ipAddress?: string
+  userAgent?: string
 }
-
-export type CreateAuditLogData = Omit<AuditLog, "id" | "timestamp">
