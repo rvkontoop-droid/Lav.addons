@@ -1,71 +1,69 @@
-import { supabase } from "./supabase"
-import type { AuditLog } from "@/types/audit"
+import type { AuditLog, CreateAuditLogData } from "@/types/audit"
+import { supabase, isSupabaseConfigured } from "./supabase"
 
-export async function createAuditLog(log: Omit<AuditLog, "id" | "timestamp">): Promise<void> {
-  const auditEntry = {
-    id: `audit_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-    action: log.action,
-    entity_type: log.entityType,
-    entity_id: log.entityId,
-    entity_name: log.entityName,
-    username: log.username,
-    user_id: log.userId,
-    changes: log.changes,
+// In-memory storage fallback
+let auditLogsCache: AuditLog[] = []
+
+export async function createAuditLog(data: CreateAuditLogData): Promise<void> {
+  const auditLog: AuditLog = {
+    id: crypto.randomUUID(),
+    ...data,
+    timestamp: new Date().toISOString(),
   }
 
-  const { error } = await supabase.from("audit_logs").insert(auditEntry)
+  // Try Supabase first if configured
+  if (isSupabaseConfigured() && supabase) {
+    try {
+      const { error } = await supabase.from("audit_logs").insert([auditLog])
 
-  if (error) {
-    console.error("Error creating audit log:", error)
-  } else {
-    console.log(`🔍 AUDIT LOG: ${log.action} ${log.entityType} "${log.entityName}" by ${log.username}`)
+      if (!error) return
+      console.error("Supabase error, falling back to memory storage:", error)
+    } catch (error) {
+      console.error("Supabase error, falling back to memory storage:", error)
+    }
+  }
+
+  // Fallback to in-memory storage
+  auditLogsCache.push(auditLog)
+
+  // Keep only last 1000 entries in memory
+  if (auditLogsCache.length > 1000) {
+    auditLogsCache = auditLogsCache.slice(-1000)
   }
 }
 
-export async function getAuditLogs(limit = 50): Promise<AuditLog[]> {
-  const { data: logs, error } = await supabase
-    .from("audit_logs")
-    .select("*")
-    .order("timestamp", { ascending: false })
-    .limit(limit)
+export async function getAuditLogs(): Promise<AuditLog[]> {
+  // Try Supabase first if configured
+  if (isSupabaseConfigured() && supabase) {
+    try {
+      const { data: logs, error } = await supabase
+        .from("audit_logs")
+        .select("*")
+        .order("timestamp", { ascending: false })
+        .limit(100)
 
-  if (error) {
-    console.error("Error fetching audit logs:", error)
-    return []
+      if (error) throw error
+      return logs || []
+    } catch (error) {
+      console.error("Supabase error, falling back to memory storage:", error)
+    }
   }
 
-  return (
-    logs?.map((log) => ({
-      id: log.id,
-      action: log.action,
-      entityType: log.entity_type,
-      entityId: log.entity_id,
-      entityName: log.entity_name,
-      username: log.username,
-      userId: log.user_id,
-      changes: log.changes,
-      timestamp: log.timestamp,
-    })) || []
-  )
+  // Fallback to in-memory storage
+  return [...auditLogsCache].reverse()
 }
 
-export function compareObjects(oldObj: any, newObj: any): { field: string; oldValue: any; newValue: any }[] {
-  const changes: { field: string; oldValue: any; newValue: any }[] = []
+export function compareObjects(oldObj: any, newObj: any): Record<string, { old: any; new: any }> {
+  const changes: Record<string, { old: any; new: any }> = {}
 
-  const allKeys = new Set([...Object.keys(oldObj || {}), ...Object.keys(newObj || {})])
+  const allKeys = new Set([...Object.keys(oldObj), ...Object.keys(newObj)])
 
   for (const key of allKeys) {
-    if (key === "id" || key === "createdAt" || key === "downloads") continue // Skip system fields
-
-    const oldValue = oldObj?.[key]
-    const newValue = newObj?.[key]
-
-    if (JSON.stringify(oldValue) !== JSON.stringify(newValue)) {
-      changes.push({
-        field: key,
-        oldValue,
-        newValue,
-      })
+    if (oldObj[key] !== newObj[key]) {
+      changes[key] = {
+        old: oldObj[key],
+        new: newObj[key],
+      }
     }
   }
 

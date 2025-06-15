@@ -1,9 +1,13 @@
-import { supabase } from "./supabase"
+import fs from "fs/promises"
+import path from "path"
+import type { CategorizedAddons } from "@/types/addon"
+import { supabase, isSupabaseConfigured } from "./supabase"
 import type { Addon } from "@/types/addon"
 
-type CategorizedAddons = {
-  [category: string]: Addon[]
-}
+const ADDONS_FILE = path.join(process.cwd(), "data", "addons.json")
+
+// In-memory storage fallback
+let addonsCache: CategorizedAddons | null = null
 
 const EMPTY_STRUCTURE: CategorizedAddons = {
   explanation: [],
@@ -19,46 +23,91 @@ const EMPTY_STRUCTURE: CategorizedAddons = {
 }
 
 export async function getAddons(): Promise<CategorizedAddons> {
-  try {
-    const { data: addons, error } = await supabase.from("addons").select("*").order("created_at", { ascending: false })
+  // Try Supabase first if configured
+  if (isSupabaseConfigured() && supabase) {
+    try {
+      const { data: addons, error } = await supabase
+        .from("addons")
+        .select("*")
+        .order("created_at", { ascending: false })
 
-    if (error) {
-      console.error("Error fetching addons:", error)
-      return { ...EMPTY_STRUCTURE }
+      if (error) throw error
+
+      // Group addons by category
+      const categorizedAddons: CategorizedAddons = {}
+      addons.forEach((addon) => {
+        if (!categorizedAddons[addon.category]) {
+          categorizedAddons[addon.category] = []
+        }
+        categorizedAddons[addon.category].push(addon)
+      })
+
+      return categorizedAddons
+    } catch (error) {
+      console.error("Supabase error, falling back to file storage:", error)
+    }
+  }
+
+  // Fallback to file storage
+  try {
+    if (addonsCache) {
+      return addonsCache
     }
 
-    // Group addons by category
-    const categorized: CategorizedAddons = { ...EMPTY_STRUCTURE }
-
-    addons?.forEach((addon) => {
-      if (categorized[addon.category]) {
-        categorized[addon.category].push({
-          id: addon.id,
-          name: addon.name,
-          description: addon.description,
-          category: addon.category,
-          tags: addon.tags || [],
-          author: addon.author,
-          downloadUrl: addon.download_url,
-          previewUrl: addon.preview_url,
-          videoUrl: addon.video_url,
-          downloads: addon.downloads,
-          createdAt: addon.created_at,
-        })
-      }
-    })
-
-    return categorized
+    const data = await fs.readFile(ADDONS_FILE, "utf-8")
+    const categorizedAddons = JSON.parse(data) as CategorizedAddons
+    addonsCache = categorizedAddons
+    return categorizedAddons
   } catch (error) {
-    console.error("Error in getAddons:", error)
-    return { ...EMPTY_STRUCTURE }
+    console.error("Error reading addons file:", error)
+    // Return empty structure if file doesn't exist
+    return {
+      Home: [],
+      Explanation: [],
+      Settings: [],
+      Sound: [],
+      Bloodfx: [],
+      Citizen: [],
+      Mods: [],
+      Skin: [],
+      Killfx: [],
+      Props: [],
+      Reshades: [],
+    }
   }
 }
 
-export async function saveAddons(addons: CategorizedAddons): Promise<void> {
-  // This function is kept for compatibility but individual addon operations
-  // should use addAddon, updateAddon, deleteAddon instead
-  console.warn("saveAddons is deprecated, use individual addon operations")
+export async function saveAddons(categorizedAddons: CategorizedAddons): Promise<void> {
+  // Try Supabase first if configured
+  if (isSupabaseConfigured() && supabase) {
+    try {
+      // Clear existing addons
+      await supabase.from("addons").delete().neq("id", "")
+
+      // Insert all addons
+      const allAddons = Object.entries(categorizedAddons).flatMap(([category, addons]) =>
+        addons.map((addon) => ({ ...addon, category })),
+      )
+
+      if (allAddons.length > 0) {
+        const { error } = await supabase.from("addons").insert(allAddons)
+        if (error) throw error
+      }
+
+      return
+    } catch (error) {
+      console.error("Supabase error, falling back to file storage:", error)
+    }
+  }
+
+  // Fallback to file storage
+  try {
+    await fs.writeFile(ADDONS_FILE, JSON.stringify(categorizedAddons, null, 2))
+    addonsCache = categorizedAddons
+  } catch (error) {
+    console.error("Error writing addons file:", error)
+    throw error
+  }
 }
 
 export async function addAddon(addon: Omit<Addon, "createdAt">): Promise<void> {
