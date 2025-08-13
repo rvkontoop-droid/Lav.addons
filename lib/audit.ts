@@ -1,5 +1,5 @@
 import type { AuditLog } from "@/types/audit"
-import { supabaseAdmin } from "@/lib/supabase-admin"
+import { supabase } from "@/lib/supabase"
 
 export async function createAuditLog(log: Omit<AuditLog, "id" | "timestamp">): Promise<void> {
   const auditEntry: AuditLog = {
@@ -8,13 +8,15 @@ export async function createAuditLog(log: Omit<AuditLog, "id" | "timestamp">): P
     timestamp: new Date().toISOString(),
   }
 
-  await supabaseAdmin.from("audit_logs").insert([auditEntry])
+  await supabase
+    .from("audit_logs")
+    .insert([auditEntry])
 
   console.log(`🔍 AUDIT LOG: ${log.action} ${log.entityType} "${log.entityName}" by ${log.username}`)
 }
 
 export async function getAuditLogs(limit = 50): Promise<AuditLog[]> {
-  const { data } = await supabaseAdmin
+  const { data } = await supabase
     .from("audit_logs")
     .select("*")
     .order("timestamp", { ascending: false })
@@ -25,6 +27,7 @@ export async function getAuditLogs(limit = 50): Promise<AuditLog[]> {
 
 export function compareObjects(oldObj: any, newObj: any): { field: string; oldValue: any; newValue: any }[] {
   const changes: { field: string; oldValue: any; newValue: any }[] = []
+
   const allKeys = new Set([...Object.keys(oldObj || {}), ...Object.keys(newObj || {})])
 
   for (const key of allKeys) {
@@ -34,7 +37,11 @@ export function compareObjects(oldObj: any, newObj: any): { field: string; oldVa
     const newValue = newObj?.[key]
 
     if (JSON.stringify(oldValue) !== JSON.stringify(newValue)) {
-      changes.push({ field: key, oldValue, newValue })
+      changes.push({
+        field: key,
+        oldValue,
+        newValue,
+      })
     }
   }
 
