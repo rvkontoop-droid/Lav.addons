@@ -1,7 +1,5 @@
 import type { AuditLog } from "@/types/audit"
-
-// In-memory audit log storage (in production, use a database)
-let auditLogs: AuditLog[] = []
+import { supabaseAdmin } from "@/lib/supabase-admin"
 
 export async function createAuditLog(log: Omit<AuditLog, "id" | "timestamp">): Promise<void> {
   const auditEntry: AuditLog = {
@@ -10,37 +8,33 @@ export async function createAuditLog(log: Omit<AuditLog, "id" | "timestamp">): P
     timestamp: new Date().toISOString(),
   }
 
-  auditLogs.unshift(auditEntry) // Add to beginning
-
-  // Keep only last 1000 entries to prevent memory issues
-  if (auditLogs.length > 1000) {
-    auditLogs = auditLogs.slice(0, 1000)
-  }
+  await supabaseAdmin.from("audit_logs").insert([auditEntry])
 
   console.log(`🔍 AUDIT LOG: ${log.action} ${log.entityType} "${log.entityName}" by ${log.username}`)
 }
 
 export async function getAuditLogs(limit = 50): Promise<AuditLog[]> {
-  return auditLogs.slice(0, limit)
+  const { data } = await supabaseAdmin
+    .from("audit_logs")
+    .select("*")
+    .order("timestamp", { ascending: false })
+    .limit(limit)
+
+  return data || []
 }
 
 export function compareObjects(oldObj: any, newObj: any): { field: string; oldValue: any; newValue: any }[] {
   const changes: { field: string; oldValue: any; newValue: any }[] = []
-
   const allKeys = new Set([...Object.keys(oldObj || {}), ...Object.keys(newObj || {})])
 
   for (const key of allKeys) {
-    if (key === "id" || key === "createdAt" || key === "downloads") continue // Skip system fields
+    if (key === "id" || key === "createdAt" || key === "downloads") continue
 
     const oldValue = oldObj?.[key]
     const newValue = newObj?.[key]
 
     if (JSON.stringify(oldValue) !== JSON.stringify(newValue)) {
-      changes.push({
-        field: key,
-        oldValue,
-        newValue,
-      })
+      changes.push({ field: key, oldValue, newValue })
     }
   }
 
