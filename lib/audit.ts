@@ -1,12 +1,7 @@
 import type { AuditLog } from "@/types/audit"
+import { supabaseAdmin } from "@/lib/supabase-admin"
 
-// ✅ يبقى التخزين في الذاكرة شغال زي ما هو
 let auditLogs: AuditLog[] = []
-
-// 👇 نحمّل supabaseAdmin فقط عند الحاجة (عشان ما نكسر شي)
-const auditToDb = process.env.AUDIT_TO_DB === "true"
-const loadAdmin = async () =>
-  auditToDb ? (await import("@/lib/supabase-admin")).supabaseAdmin : null
 
 export async function createAuditLog(log: Omit<AuditLog, "id" | "timestamp">): Promise<void> {
   const auditEntry: AuditLog = {
@@ -15,27 +10,38 @@ export async function createAuditLog(log: Omit<AuditLog, "id" | "timestamp">): P
     timestamp: new Date().toISOString(),
   }
 
-  // الذاكرة: نفس السلوك الحالي
+  // تخزين الذاكرة (يبقى شغال زي أول)
   auditLogs.unshift(auditEntry)
   if (auditLogs.length > 1000) auditLogs = auditLogs.slice(0, 1000)
 
-  // اختياري: ارسال نسخة للـ DB بدون ما يوقف الموقع لو فشل
-  if (auditToDb) {
-    try {
-      const supabaseAdmin = await loadAdmin()
-      if (supabaseAdmin) {
-        await supabaseAdmin.from("audit_logs").insert([auditEntry])
-      }
-    } catch (e) {
-      console.error("AUDIT DB insert failed:", e)
+  // محاولة حفظ في Supabase (بدون كسر الموقع لو فشل)
+  try {
+    const { error } = await supabaseAdmin
+      .from("audit_logs")
+      .insert([{
+        id: auditEntry.id,
+        timestamp: auditEntry.timestamp,
+        action: auditEntry.action,
+        entityType: (auditEntry as any).entityType,
+        entityName: (auditEntry as any).entityName,
+        entityId: (auditEntry as any).entityId ?? null,
+        username: (auditEntry as any).username,
+        userId: (auditEntry as any).userId ?? null,
+        userAvatar: (auditEntry as any).userAvatar ?? null,
+        changes: (auditEntry as any).changes ?? null,
+      }])
+
+    if (error) {
+      console.error("AUDIT DB insert failed:", error)
     }
+  } catch (e) {
+    console.error("AUDIT DB insert threw:", e)
   }
 
   console.log(`🔍 AUDIT LOG: ${log.action} ${log.entityType} "${log.entityName}" by ${log.username}`)
 }
 
 export async function getAuditLogs(limit = 50): Promise<AuditLog[]> {
-  // نرجع من الذاكرة زي ما هو الآن
   return auditLogs.slice(0, limit)
 }
 
