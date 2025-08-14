@@ -5,9 +5,7 @@ import { type NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/supabase-admin";
-
-// نوع الواجهة (اختياري توضيحي)
-// import type { Addon } from "@/types/addon";
+import { createAuditLog } from "@/lib/audit";
 
 type Row = {
   id: string;
@@ -24,8 +22,7 @@ type Row = {
   updated_at: string | null;
 };
 
-// حوّل صفّ Supabase إلى الشكل اللي تتوقعه الواجهة
-function toAddon(row: Row /*): Addon*/) {
+function toAddon(row: Row) {
   return {
     id: row.id,
     name: row.name,
@@ -52,12 +49,8 @@ export async function GET(request: NextRequest) {
     const sortBy = searchParams.get("sortBy") || "newest";
 
     let query = supabaseAdmin.from("addons").select("*");
-
     if (category) query = query.eq("category", category);
-    if (search) {
-      // بحث بالاسم والوصف
-      query = query.or(`name.ilike.%${search}%,description.ilike.%${search}%`);
-    }
+    if (search) query = query.or(`name.ilike.%${search}%,description.ilike.%${search}%`);
 
     switch (sortBy) {
       case "oldest":
@@ -79,7 +72,6 @@ export async function GET(request: NextRequest) {
     const mapped = (data ?? []).map(toAddon);
     return NextResponse.json(mapped);
   } catch (error) {
-    console.error("Failed to fetch addons:", error);
     return NextResponse.json({ error: "Failed to fetch addons" }, { status: 500 });
   }
 }
@@ -87,15 +79,10 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
-    if (!session) {
-      return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
-    }
-    if (!session.user.isAddonsTeam) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-    }
+    if (!session) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+    if (!session.user.isAddonsTeam) return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
 
     const body = await request.json();
-
     if (!body.name || !body.description || !body.category || !body.downloadUrl) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
@@ -105,28 +92,39 @@ export async function POST(request: NextRequest) {
 
     const { data, error } = await supabaseAdmin
       .from("addons")
-      .insert([{
-        id,
-        name: body.name,
-        description: body.description ?? "",
-        category: body.category,
-        download_url: body.downloadUrl,
-        image_url: body.imageUrl ?? null,
-        video_url: body.videoUrl ?? null,
-        author_discord_tag: body.author?.discordTag ?? body.authorDiscordTag ?? "",
-        author_discord_id: body.author?.discordId ?? body.authorDiscordId ?? "",
-        downloads: 0,
-        created_at: now,
-        updated_at: now
-      }])
+      .insert([
+        {
+          id,
+          name: body.name,
+          description: body.description ?? "",
+          category: body.category,
+          download_url: body.downloadUrl,
+          image_url: body.imageUrl ?? null,
+          video_url: body.videoUrl ?? null,
+          author_discord_tag: body.author?.discordTag ?? body.authorDiscordTag ?? "",
+          author_discord_id: body.author?.discordId ?? body.authorDiscordId ?? "",
+          downloads: 0,
+          created_at: now,
+          updated_at: now,
+        },
+      ])
       .select("*")
       .single();
 
     if (error) throw error;
 
+    await createAuditLog({
+      action: "CREATE",
+      entityType: "ADDON",
+      entityId: (data as Row).id,
+      entityName: (data as Row).name,
+      username: session.user.username,
+      userId: session.user.id,
+      userAvatar: session.user.avatar,
+    });
+
     return NextResponse.json(toAddon(data as Row), { status: 201 });
   } catch (error) {
-    console.error("Upload error:", error);
     return NextResponse.json({ error: "Failed to upload addon" }, { status: 500 });
   }
 }
@@ -134,18 +132,12 @@ export async function POST(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
-    if (!session) {
-      return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
-    }
-    if (!session.user.isAddonsTeam) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-    }
+    if (!session) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+    if (!session.user.isAddonsTeam) return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
 
     const { searchParams } = new URL(request.url);
     const addonId = searchParams.get("id");
-    if (!addonId) {
-      return NextResponse.json({ error: "Addon ID is required" }, { status: 400 });
-    }
+    if (!addonId) return NextResponse.json({ error: "Addon ID is required" }, { status: 400 });
 
     const { data, error } = await supabaseAdmin
       .from("addons")
@@ -156,9 +148,18 @@ export async function DELETE(request: NextRequest) {
 
     if (error) throw error;
 
+    await createAuditLog({
+      action: "DELETE",
+      entityType: "ADDON",
+      entityId: (data as Row).id,
+      entityName: (data as Row).name,
+      username: session.user.username,
+      userId: session.user.id,
+      userAvatar: session.user.avatar,
+    });
+
     return NextResponse.json({ message: "Addon deleted successfully", id: (data as Row)?.id });
   } catch (error) {
-    console.error("Delete error:", error);
     return NextResponse.json({ error: "Failed to delete addon" }, { status: 500 });
   }
 }
