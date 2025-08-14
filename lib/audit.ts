@@ -1,5 +1,7 @@
 import type { AuditLog } from "@/types/audit"
-import { supabaseAdmin } from "@/lib/supabase-admin"
+
+// In-memory audit log storage (in production, use a database)
+let auditLogs: AuditLog[] = []
 
 export async function createAuditLog(log: Omit<AuditLog, "id" | "timestamp">): Promise<void> {
   const auditEntry: AuditLog = {
@@ -8,45 +10,39 @@ export async function createAuditLog(log: Omit<AuditLog, "id" | "timestamp">): P
     timestamp: new Date().toISOString(),
   }
 
-  await supabaseAdmin.from("audit_logs").insert({
-    id: auditEntry.id,
-    timestamp: auditEntry.timestamp,
-    username: auditEntry.username,
-    action: auditEntry.action,
-    entityType: auditEntry.entityType,
-    entityName: auditEntry.entityName,
-    details: (auditEntry as any).changes ?? null,
-  })
+  auditLogs.unshift(auditEntry) // Add to beginning
+
+  // Keep only last 1000 entries to prevent memory issues
+  if (auditLogs.length > 1000) {
+    auditLogs = auditLogs.slice(0, 1000)
+  }
+
+  console.log(`🔍 AUDIT LOG: ${log.action} ${log.entityType} "${log.entityName}" by ${log.username}`)
 }
 
 export async function getAuditLogs(limit = 50): Promise<AuditLog[]> {
-  const { data } = await supabaseAdmin
-    .from("audit_logs")
-    .select("id,timestamp,username,action,entityType,entityName,details")
-    .order("timestamp", { ascending: false })
-    .limit(limit)
-
-  return (data ?? []).map((r: any) => ({
-    id: r.id,
-    timestamp: r.timestamp,
-    username: r.username,
-    action: r.action,
-    entityType: r.entityType,
-    entityName: r.entityName,
-    changes: r.details ?? undefined,
-  }))
+  return auditLogs.slice(0, limit)
 }
 
 export function compareObjects(oldObj: any, newObj: any): { field: string; oldValue: any; newValue: any }[] {
   const changes: { field: string; oldValue: any; newValue: any }[] = []
+
   const allKeys = new Set([...Object.keys(oldObj || {}), ...Object.keys(newObj || {})])
+
   for (const key of allKeys) {
-    if (key === "id" || key === "createdAt" || key === "downloads") continue
+    if (key === "id" || key === "createdAt" || key === "downloads") continue // Skip system fields
+
     const oldValue = oldObj?.[key]
     const newValue = newObj?.[key]
+
     if (JSON.stringify(oldValue) !== JSON.stringify(newValue)) {
-      changes.push({ field: key, oldValue, newValue })
+      changes.push({
+        field: key,
+        oldValue,
+        newValue,
+      })
     }
   }
+
   return changes
 }
