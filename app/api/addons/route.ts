@@ -1,134 +1,170 @@
-export const runtime = "nodejs";
+import { type NextRequest, NextResponse } from "next/server"
+import { getServerSession } from "next-auth/next"
+import { authOptions } from "@/lib/auth"
+import { getAddons, saveAddons, flattenAddons } from "@/lib/storage"
+import { createAuditLog } from "@/lib/audit"
+import type { Addon } from "@/types/addon"
 
-import { NextResponse, type NextRequest } from "next/server";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/lib/auth";
-import { supabaseAdmin } from "@/lib/supabase-admin";
-import { createAuditLog, compareObjects } from "@/lib/audit";
-
-type Row = {
-  id: string;
-  name: string;
-  description: string | null;
-  category: string;
-  download_url: string;
-  image_url: string | null;
-  video_url: string | null;
-  author_discord_tag: string | null;
-  author_discord_id: string | null;
-  downloads: number | null;
-  created_at: string | null;
-  updated_at: string | null;
-  deleted_at?: string | null;
-};
-
-function toAddon(row: Row) {
-  return {
-    id: row.id,
-    name: row.name,
-    description: row.description ?? "",
-    category: row.category,
-    downloadUrl: row.download_url,
-    imageUrl: row.image_url ?? "/placeholder.svg?height=200&width=300",
-    videoUrl: row.video_url ?? null,
-    author: {
-      discordTag: row.author_discord_tag ?? "",
-      discordId: row.author_discord_id ?? "",
-    },
-    downloads: row.downloads ?? 0,
-    createdAt: row.created_at ?? new Date().toISOString(),
-    updatedAt: row.updated_at ?? row.created_at ?? new Date().toISOString(),
-  };
-}
-
-// GET /api/addons/[id]
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(request: NextRequest) {
   try {
-    const { data, error } = await supabaseAdmin
-      .from("addons")
-      .select("*")
-      .eq("id", params.id)
-      .is("deleted_at", null)
-      .single();
+    const categorizedAddons = await getAddons()
+    const { searchParams } = new URL(request.url)
+    const category = searchParams.get("category")
 
-    if (error && error.code !== "PGRST116") throw error; // not found code
-    if (!data) return NextResponse.json({ error: "Addon not found" }, { status: 404 });
+    let filteredAddons: Addon[] = []
 
-    return NextResponse.json(toAddon(data as Row));
-  } catch {
-    return NextResponse.json({ error: "Failed to fetch addon" }, { status: 500 });
+    if (category && categorizedAddons[category]) {
+      filteredAddons = [...categorizedAddons[category]]
+    } else {
+      filteredAddons = flattenAddons(categorizedAddons)
+    }
+
+    const search = searchParams.get("search")
+    if (search) {
+      const searchLower = search.toLowerCase()
+      filteredAddons = filteredAddons.filter(
+        (addon) =>
+          addon.name.toLowerCase().includes(searchLower) ||
+          addon.description.toLowerCase().includes(searchLower) ||
+          addon.tags?.some((tag) => tag.toLowerCase().includes(searchLower)),
+      )
+    }
+
+    const sortBy = searchParams.get("sortBy") || "newest"
+    switch (sortBy) {
+      case "oldest":
+        filteredAddons.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+        break
+      case "popular":
+        filteredAddons.sort((a, b) => b.downloads - a.downloads)
+        break
+      case "name":
+        filteredAddons.sort((a, b) => a.name.localeCompare(b.name))
+        break
+      default:
+        filteredAddons.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    }
+
+    return NextResponse.json(filteredAddons)
+  } catch (error) {
+    console.error("Failed to fetch addons:", error)
+    return NextResponse.json({ error: "Failed to fetch addons" }, { status: 500 })
   }
 }
 
-// PATCH /api/addons/[id]  (تعديل)
-export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
-    if (!session.user.isAddonsTeam) return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+    const session = await getServerSession(authOptions)
 
-    const id = params.id;
-    const body = await req.json();
+    if (!session) {
+      return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+    }
 
-    // جيب النسخة القديمة للمقارنة
-    const { data: oldRow, error: selErr } = await supabaseAdmin
-      .from("addons")
-      .select("*")
-      .eq("id", id)
-      .single();
+    if (!session.user.isAddonsTeam) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 403 })
+    }
 
-    if (selErr && selErr.code !== "PGRST116") throw selErr;
-    if (!oldRow) return NextResponse.json({ error: "Addon not found" }, { status: 404 });
-
-    // حضّر حقول التحديث (حوّل camelCase → snake_case)
-    const patch: Partial<Row> = {
-      name: body.name,
-      description: body.description,
-      category: body.category,
-      download_url: body.downloadUrl,
-      image_url: body.imageUrl,
-      video_url: body.videoUrl,
-      author_discord_tag: body.author?.discordTag ?? body.authorDiscordTag,
-      author_discord_id: body.author?.discordId ?? body.authorDiscordId,
-      updated_at: new Date().toISOString(),
-    };
-
-    // احذف المفاتيح غير المرسلة (لا تحدّثها)
-    Object.keys(patch).forEach((k) => {
-      const key = k as keyof Row;
-      if (patch[key] === undefined) delete patch[key];
-    });
-
-    const { data, error } = await supabaseAdmin
-      .from("addons")
-      .update(patch)
-      .eq("id", id)
-      .select("*")
-      .single();
-
-    if (error) throw error;
-
-    // سجّل اللوق مع تفاصيل التغييرات
+    let addonData: Omit<Addon, "id" | "createdAt" | "downloads">
     try {
-      const oldForCompare = toAddon(oldRow as Row);
-      const newForCompare = toAddon(data as Row);
-      const changes = compareObjects(oldForCompare, newForCompare);
+      const body = await request.text()
+      addonData = JSON.parse(body)
+    } catch (error) {
+      return NextResponse.json({ error: "Invalid data" }, { status: 400 })
+    }
 
-      await createAuditLog({
-        action: "UPDATE",
-        entityType: "ADDON",
-        entityId: id,
-        entityName: newForCompare.name,
-        username: session.user.username,
-        userId: session.user.id,
-        userAvatar: session.user.avatar,
-        // نرسل التغييرات إذا ودك تحفظها في details/changes حسب تنفيذك
-        changes,
-      });
-    } catch {}
+    if (!addonData.name || !addonData.description || !addonData.category || !addonData.downloadUrl) {
+      return NextResponse.json({ error: "Missing required fields" }, { status: 400 })
+    }
 
-    return NextResponse.json(toAddon(data as Row));
-  } catch {
-    return NextResponse.json({ error: "Failed to update addon" }, { status: 500 });
+    const categorizedAddons = await getAddons()
+
+    if (!categorizedAddons.hasOwnProperty(addonData.category)) {
+      return NextResponse.json({ error: "Invalid category" }, { status: 400 })
+    }
+
+    const newAddon: Addon = {
+      ...addonData,
+      id: `${addonData.category}_${Date.now()}`,
+      createdAt: new Date().toISOString().split("T")[0],
+      updatedAt: new Date().toISOString().split("T")[0],
+      downloads: 0,
+    }
+
+    categorizedAddons[addonData.category].push(newAddon)
+    await saveAddons(categorizedAddons)
+
+    // Create audit log
+    await createAuditLog({
+      action: "CREATE",
+      entityType: "ADDON",
+      entityId: newAddon.id,
+      entityName: newAddon.name,
+      userId: session.user.id,
+      username: session.user.username,
+      userAvatar: session.user.avatar,
+    })
+
+    return NextResponse.json(newAddon, { status: 201 })
+  } catch (error) {
+    console.error("Upload error:", error)
+    return NextResponse.json({ error: "Failed to upload addon" }, { status: 500 })
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session) {
+      return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+    }
+
+    if (!session.user.isAddonsTeam) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 403 })
+    }
+
+    const { searchParams } = new URL(request.url)
+    const addonId = searchParams.get("id")
+
+    if (!addonId) {
+      return NextResponse.json({ error: "Addon ID is required" }, { status: 400 })
+    }
+
+    const categorizedAddons = await getAddons()
+
+    let found = false
+    let deletedAddon: Addon | null = null
+
+    for (const category in categorizedAddons) {
+      const index = categorizedAddons[category].findIndex((addon) => addon.id === addonId)
+      if (index !== -1) {
+        deletedAddon = categorizedAddons[category][index]
+        categorizedAddons[category].splice(index, 1)
+        found = true
+        break
+      }
+    }
+
+    if (!found || !deletedAddon) {
+      return NextResponse.json({ error: "Addon not found" }, { status: 404 })
+    }
+
+    await saveAddons(categorizedAddons)
+
+    // Create audit log
+    await createAuditLog({
+      action: "DELETE",
+      entityType: "ADDON",
+      entityId: deletedAddon.id,
+      entityName: deletedAddon.name,
+      userId: session.user.id,
+      username: session.user.username,
+      userAvatar: session.user.avatar,
+    })
+
+    return NextResponse.json({ message: "Addon deleted successfully" })
+  } catch (error) {
+    console.error("Delete error:", error)
+    return NextResponse.json({ error: "Failed to delete addon" }, { status: 500 })
   }
 }
