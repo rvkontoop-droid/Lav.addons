@@ -24,19 +24,19 @@ const ALLOWED_CATEGORIES = new Set([
 function rowToAddon(row: any): Addon {
   return {
     id: row.id,
-    name: row.name,
+    name: row.name ?? "",
     description: row.description ?? "",
-    category: row.category,
-    downloadUrl: row.download_url,
-    imageUrl: row.image_url ?? undefined,
-    videoUrl: row.video_url ?? undefined,
+    category: row.category ?? "",
+    downloadUrl: row.download_url ?? "",
+    imageUrl: row.image_url ?? "",
+    videoUrl: row.video_url ?? "",
     author: {
-      discordTag: row.author_discord_tag ?? undefined,
-      discordId: row.author_discord_id ?? undefined,
+      discordTag: row.author_discord_tag ?? "",
+      discordId: row.author_discord_id ?? "",
     },
     downloads: row.downloads ?? 0,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    createdAt: row.created_at ?? new Date().toISOString(),
+    updatedAt: row.updated_at ?? row.created_at ?? new Date().toISOString(),
   }
 }
 
@@ -145,22 +145,23 @@ export async function POST(request: NextRequest) {
       userAvatar: session.user.avatar,
     })
 
-    const newAddon: Addon = {
-      id,
-      name: addonData.name,
-      description: addonData.description ?? "",
-      category: addonData.category,
-      downloadUrl: addonData.downloadUrl,
-      imageUrl: addonData.imageUrl ?? undefined,
-      videoUrl: addonData.videoUrl ?? undefined,
-      author: {
-        discordTag: addonData.author?.discordTag ?? undefined,
-        discordId: addonData.author?.discordId ?? undefined,
-      },
-      downloads: 0,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    }
+const newAddon: Addon = {
+  id,
+  name: addonData.name ?? "",
+  description: addonData.description ?? "",
+  category: addonData.category ?? "",
+  downloadUrl: addonData.downloadUrl ?? "",
+  imageUrl: addonData.imageUrl ?? "",
+  videoUrl: addonData.videoUrl ?? "",
+  author: {
+    discordTag: addonData.author?.discordTag ?? "",
+    discordId: addonData.author?.discordId ?? "",
+  },
+  downloads: 0,
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString(),
+}
+
 
     return NextResponse.json(newAddon, { status: 201 })
   } catch {
