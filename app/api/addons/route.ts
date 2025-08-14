@@ -31,8 +31,8 @@ function rowToAddon(row: any): Addon {
     imageUrl: row.image_url ?? "",
     videoUrl: row.video_url ?? "",
     author: {
-      discordTag: row.author_discord_tag ?? "",
-      discordId: row.author_discord_id ?? "",
+      discordTag: row.author_discord_tag ?? row.created_by_username ?? "",
+      discordId: row.author_discord_id ?? row.created_by_user_id ?? "",
     },
     downloads: row.downloads ?? 0,
     createdAt: row.created_at ?? new Date().toISOString(),
@@ -117,6 +117,9 @@ export async function POST(request: NextRequest) {
     }
 
     const id = randomUUID()
+    const authorTag = addonData.author?.discordTag ?? session.user.username ?? null
+    const authorId = addonData.author?.discordId ?? session.user.id ?? null
+
     const row = {
       id,
       name: addonData.name,
@@ -125,8 +128,11 @@ export async function POST(request: NextRequest) {
       download_url: addonData.downloadUrl,
       image_url: addonData.imageUrl ?? null,
       video_url: addonData.videoUrl ?? null,
-      author_discord_tag: addonData.author?.discordTag ?? null,
-      author_discord_id: addonData.author?.discordId ?? null,
+      author_discord_tag: authorTag,
+      author_discord_id: authorId,
+      created_by_username: session.user.username,
+      created_by_user_id: session.user.id,
+      created_by_user_avatar: session.user.avatar,
       downloads: 0,
     }
 
@@ -145,23 +151,22 @@ export async function POST(request: NextRequest) {
       userAvatar: session.user.avatar,
     })
 
-const newAddon: Addon = {
-  id,
-  name: addonData.name ?? "",
-  description: addonData.description ?? "",
-  category: addonData.category ?? "",
-  downloadUrl: addonData.downloadUrl ?? "",
-  imageUrl: addonData.imageUrl ?? "",
-  videoUrl: addonData.videoUrl ?? "",
-  author: {
-    discordTag: addonData.author?.discordTag ?? "",
-    discordId: addonData.author?.discordId ?? "",
-  },
-  downloads: 0,
-  createdAt: new Date().toISOString(),
-  updatedAt: new Date().toISOString(),
-}
-
+    const newAddon: Addon = {
+      id,
+      name: addonData.name ?? "",
+      description: addonData.description ?? "",
+      category: addonData.category ?? "",
+      downloadUrl: addonData.downloadUrl ?? "",
+      imageUrl: addonData.imageUrl ?? "",
+      videoUrl: addonData.videoUrl ?? "",
+      author: {
+        discordTag: authorTag ?? "",
+        discordId: authorId ?? "",
+      },
+      downloads: 0,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
 
     return NextResponse.json(newAddon, { status: 201 })
   } catch {
