@@ -21,7 +21,7 @@ const ALLOWED_CATEGORIES = new Set([
   "reshades",
 ])
 
-function rowToAddon(row: any): Addon {
+function rowToAddon(row: any): any {
   return {
     id: row.id,
     name: row.name ?? "",
@@ -31,12 +31,15 @@ function rowToAddon(row: any): Addon {
     imageUrl: row.image_url ?? "",
     videoUrl: row.video_url ?? "",
     author: {
-      discordTag: row.author_discord_tag ?? row.created_by_username ?? "",
-      discordId: row.author_discord_id ?? row.created_by_user_id ?? "",
+      discordTag: (row.author_discord_tag ?? row.created_by_username ?? "") || "",
+      discordId: (row.author_discord_id ?? row.created_by_user_id ?? "") || "",
     },
     downloads: row.downloads ?? 0,
     createdAt: row.created_at ?? new Date().toISOString(),
     updatedAt: row.updated_at ?? row.created_at ?? new Date().toISOString(),
+    createdByUsername: row.created_by_username ?? "",
+    createdByUserId: row.created_by_user_id ?? "",
+    createdByUserAvatar: row.created_by_user_avatar ?? "",
   }
 }
 
@@ -53,7 +56,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Failed to fetch addons" }, { status: 500 })
     }
 
-    let addons: Addon[] = (data || []).map(rowToAddon)
+    let addons: any[] = (data || []).map(rowToAddon)
 
     if (category) {
       addons = addons.filter((a) => a.category === category)
@@ -66,7 +69,7 @@ export async function GET(request: NextRequest) {
         (a) =>
           a.name.toLowerCase().includes(s) ||
           (a.description ?? "").toLowerCase().includes(s) ||
-          a.tags?.some((t) => t.toLowerCase().includes(s)),
+          a.tags?.some((t: string) => t.toLowerCase().includes(s)),
       )
     }
 
@@ -151,7 +154,7 @@ export async function POST(request: NextRequest) {
       userAvatar: session.user.avatar,
     })
 
-    const newAddon: Addon = {
+    const newAddon: any = {
       id,
       name: addonData.name ?? "",
       description: addonData.description ?? "",
@@ -166,6 +169,9 @@ export async function POST(request: NextRequest) {
       downloads: 0,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      createdByUsername: session.user.username ?? "",
+      createdByUserId: session.user.id ?? "",
+      createdByUserAvatar: session.user.avatar ?? "",
     }
 
     return NextResponse.json(newAddon, { status: 201 })
