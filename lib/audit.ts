@@ -1,23 +1,13 @@
-import fs from "fs"
-import path from "path"
 import type { AuditLog } from "@/types/audit"
+import { createClient } from "@supabase/supabase-js"
 
-const LOG_FILE_PATH = path.join(process.cwd(), "audit-logs.json")
+// أنشئ عميل Supabase
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY! // أو key لها صلاحيات insert/select
+)
 
-// Load logs from file if exists
-let auditLogs: AuditLog[] = []
-if (fs.existsSync(LOG_FILE_PATH)) {
-  try {
-    auditLogs = JSON.parse(fs.readFileSync(LOG_FILE_PATH, "utf8"))
-  } catch {
-    auditLogs = []
-  }
-}
-
-function saveLogsToFile() {
-  fs.writeFileSync(LOG_FILE_PATH, JSON.stringify(auditLogs, null, 2), "utf8")
-}
-
+// إضافة لوق جديد
 export async function createAuditLog(log: Omit<AuditLog, "id" | "timestamp">): Promise<void> {
   const auditEntry: AuditLog = {
     ...log,
@@ -25,25 +15,36 @@ export async function createAuditLog(log: Omit<AuditLog, "id" | "timestamp">): P
     timestamp: new Date().toISOString(),
   }
 
-  auditLogs.unshift(auditEntry)
+  const { error } = await supabase
+    .from("audit_logs") // اسم الجدول في Supabase
+    .insert(auditEntry)
 
-  // Keep only last 1000 entries
-  if (auditLogs.length > 1000) {
-    auditLogs = auditLogs.slice(0, 1000)
+  if (error) {
+    console.error("❌ فشل حفظ الـ Audit Log:", error)
+  } else {
+    console.log(`🔍 AUDIT LOG: ${log.action} ${log.entityType} "${log.entityName}" by ${log.username}`)
+  }
+}
+
+// جلب اللوقات
+export async function getAuditLogs(limit = 50): Promise<AuditLog[]> {
+  const { data, error } = await supabase
+    .from("audit_logs")
+    .select("*")
+    .order("timestamp", { ascending: false })
+    .limit(limit)
+
+  if (error) {
+    console.error("❌ فشل جلب الـ Audit Logs:", error)
+    return []
   }
 
-  saveLogsToFile()
-
-  console.log(`🔍 AUDIT LOG: ${log.action} ${log.entityType} "${log.entityName}" by ${log.username}`)
+  return data || []
 }
 
-export async function getAuditLogs(limit = 50): Promise<AuditLog[]> {
-  return auditLogs.slice(0, limit)
-}
-
+// مقارنة البيانات
 export function compareObjects(oldObj: any, newObj: any): { field: string; oldValue: any; newValue: any }[] {
   const changes: { field: string; oldValue: any; newValue: any }[] = []
-
   const allKeys = new Set([...Object.keys(oldObj || {}), ...Object.keys(newObj || {})])
 
   for (const key of allKeys) {
@@ -53,11 +54,7 @@ export function compareObjects(oldObj: any, newObj: any): { field: string; oldVa
     const newValue = newObj?.[key]
 
     if (JSON.stringify(oldValue) !== JSON.stringify(newValue)) {
-      changes.push({
-        field: key,
-        oldValue,
-        newValue,
-      })
+      changes.push({ field: key, oldValue, newValue })
     }
   }
 
